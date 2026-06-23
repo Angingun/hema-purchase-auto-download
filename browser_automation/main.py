@@ -599,6 +599,9 @@ def run(start_date: str = None, end_date: str = None):
 
 
 if __name__ == "__main__":
-    # 可传入自定义日期
-    # run(start_date="2024-06-01", end_date="2024-06-08")
-    run()
+    import argparse
+    parser = argparse.ArgumentParser(description="盒马采购单自动下载")
+    parser.add_argument("--start", help="要求到货日期 开始 (YYYY-MM-DD)，优先于 config")
+    parser.add_argument("--end",   help="要求到货日期 结束 (YYYY-MM-DD)，优先于 config")
+    args = parser.parse_args()
+    run(start_date=args.start, end_date=args.end)
