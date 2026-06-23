@@ -1,0 +1,7 @@
+logs/
+downloads/
+__pycache__/
+.claude/
+.playwright-mcp/
+*.pyc
+.mcp.json
