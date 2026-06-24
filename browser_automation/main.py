@@ -15,7 +15,7 @@ import sys
 import time
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -513,19 +513,26 @@ def go_to_next_page(wb: WebBridgeClient, current: int) -> bool:
     return False
 
 
-def run(start_date: str = None, end_date: str = None):
-    """主流程。"""
+def run(start_date: str = None, end_date: str = None, add_days: int = 0):
+    """主流程。
+
+    日期优先级：CLI 参数 > config/settings.py > 自动计算（今天-7天 ~ 今天）
+    --start + --add：end = start + add_days 天
+    """
     setup_logging(os.path.join(os.path.dirname(__file__), "logs"))
 
-    # 计算日期范围：
-    # 主日期 = 要求到货日期（从 config 读取或自动计算）
-    # 创建日期 = 要求到货 start - CREATE_OFFSET_DAYS，end = 要求到货 end
-    if DELIVERY_DATE_START and DELIVERY_DATE_END:
+    # 计算要求到货日期（优先级：CLI > config > 自动）
+    if start_date:
+        delivery_start = start_date
+        if end_date:
+            delivery_end = end_date
+        else:
+            dt = datetime.strptime(start_date, "%Y-%m-%d")
+            dt_end = dt + timedelta(days=add_days if add_days else 6)
+            delivery_end = dt_end.strftime("%Y-%m-%d")
+    elif DELIVERY_DATE_START and DELIVERY_DATE_END:
         delivery_start = DELIVERY_DATE_START
         delivery_end = DELIVERY_DATE_END
-    elif start_date and end_date:
-        delivery_start = start_date
-        delivery_end = end_date
     else:
         _, delivery_end = get_date_range(end_date, days_back=0)
         delivery_start, _ = get_date_range(delivery_end, days_back=7)
@@ -601,7 +608,9 @@ def run(start_date: str = None, end_date: str = None):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="盒马采购单自动下载")
-    parser.add_argument("--start", help="要求到货日期 开始 (YYYY-MM-DD)，优先于 config")
-    parser.add_argument("--end",   help="要求到货日期 结束 (YYYY-MM-DD)，优先于 config")
+    parser.add_argument("--start", help="要求到货日期 开始 (YYYY-MM-DD)")
+    parser.add_argument("--end",   help="要求到货日期 结束 (YYYY-MM-DD)")
+    parser.add_argument("--add",   type=int, default=0,
+                        help="从 --start 往后加 N 天得到结束日期（与 --end 二选一）")
     args = parser.parse_args()
-    run(start_date=args.start, end_date=args.end)
+    run(start_date=args.start, end_date=args.end, add_days=args.add)

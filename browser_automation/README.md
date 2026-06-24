@@ -1,79 +1,89 @@
 # 采购单自动下载脚本
 
-## 📁 项目结构
+通过 Kimi WebBridge 操作真实 Chrome 浏览器，自动登录盒马供应商平台，填写查询条件，逐页导出采购单 Excel。
+
+> **不再需要 Selenium、ChromeDriver、关闭 Chrome。**
+
+## 前置条件
+
+1. **Chrome** + 已登录盒马供应商平台 (`portalpro.hemaos.com`)
+2. **Kimi WebBridge 扩展** 已安装并启用
+3. **WebBridge daemon** 在运行（启动 Chrome 后打开扩展面板即自动拉起）
+
+## 安装
+
+```bash
+pip install requests
+```
+
+## 配置
+
+编辑 `config/settings.py`：
+
+```python
+# 供应商
+SUPPLIER_KEYWORD = "282265890"
+SUPPLIER_NAME = "KA佳农食品(上海)有限公司（新）"
+
+# 要求到货日期（留空则自动使用"今天-7天 ~ 今天"）
+DELIVERY_DATE_START = ""     # 如 "2026-06-06"
+DELIVERY_DATE_END   = ""     # 如 "2026-06-12"
+
+# 创建日期 = 要求到货 start 往前推 N 天
+CREATE_OFFSET_DAYS = 7
+
+# 采购单状态（脚本运行时会暂停让你手动勾选）
+PURCHASE_STATUS_WANTED = [
+    "审核通过", "部分发货", "发货完成",
+    "全部入库", "部分入库",
+]
+```
+
+## 运行
+
+```bash
+# 使用 config/settings.py 中的日期
+python main.py
+
+# 命令行传参（优先级高于 config）
+python main.py --start 2026-06-06 --end 2026-06-12
+
+# --start + --add：结束日期 = 开始日期 + N 天
+python main.py --start 2026-06-06 --add 6
+
+# 也可以配合 --end 精确指定
+python main.py --start 2026-06-06 --end 2026-06-12
+```
+
+## 运行流程
+
+1. 自动打开采购单列表页面（利用浏览器已有登录态，无需登录）
+2. 关闭弹窗 → 填写供应商 → 填写日期 → 勾选导出设置
+3. **暂停**：提示你在浏览器中手动勾选采购单状态，完成后按回车
+4. 点击查询 → 检测总页数 → 逐页全选导出 Excel
+5. 文件保存到 `C:\Users\<用户名>\Downloads`（Chrome 默认下载目录）
+
+## 项目结构
 
 ```
 browser_automation/
-├── main.py                  # 主脚本（入口）
-├── requirements.txt
+├── main.py                     # 主入口
+├── requirements.txt            # 依赖：requests
 ├── config/
-│   └── settings.py          # ⚙️ 所有配置参数（先改这里）
+│   └── settings.py             # 所有可配置参数
 ├── utils/
-│   ├── driver_setup.py      # Chrome 启动 & 反检测
-│   └── helpers.py           # 通用工具函数
-├── downloads/               # 默认下载目录（可在 settings.py 修改）
-└── logs/                    # 运行日志
+│   ├── webbridge_client.py     # WebBridge daemon HTTP API 封装
+│   ├── helpers.py              # 日志、日期计算、下载等待
+│   └── driver_setup.py         # [已废弃] 旧 Selenium 驱动
+├── logs/                       # 运行日志
+└── README.md
 ```
 
----
-
-## 🚀 快速开始
-
-### 第一步：安装 Python 依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-### 第二步：修改配置文件 `config/settings.py`
-
-| 参数 | 说明 | 如何获取 |
-|------|------|---------|
-| `CHROME_USER_DATA_DIR` | Chrome 用户数据目录 | 浏览器地址栏输入 `chrome://version`，找「个人资料路径」，复制其**父目录** |
-| `CHROME_PROFILE` | Profile 名称 | 同上，「个人资料路径」最后一段（如 `Default` 或 `Profile 1`） |
-| `DOWNLOAD_DIR` | 文件保存位置 | 自定义绝对路径 |
-
-**示例：**
-```python
-CHROME_USER_DATA_DIR = r"C:\Users\张三\AppData\Local\Google\Chrome\User Data"
-CHROME_PROFILE = "Default"
-DOWNLOAD_DIR = r"C:\Users\张三\Desktop\采购单导出"
-```
-
-### 第三步：运行脚本
-
-```bash
-python main.py
-```
-
----
-
-## ⚠️ 注意事项
-
-1. **运行前必须关闭所有 Chrome 窗口**
-   Chrome 不允许两个进程同时使用同一个 Profile，否则报错。
-
-2. **Chrome 保存密码的工作原理**
-   脚本加载你的真实 Chrome Profile，网站会自动填充已保存的密码并登录。
-   如果网站需要手动操作（如验证码），脚本会暂停等你处理。
-
-3. **日期参数**
-   - 默认自动计算：结束日期=今天，开始日期=今天-7天
-   - 手动指定：在 `main.py` 最后改为 `run(start_date="2024-06-01", end_date="2024-06-08")`
-
-4. **文件命名规则**
-   每页导出文件自动重命名为 `采购单_第001页_143022.xlsx`，防止覆盖。
-
-5. **如果选择器失效**
-   网站更新后 CSS 选择器可能变化，按 F12 重新检查元素，更新 `main.py` 中对应的选择器字符串。
-
----
-
-## 🐛 常见问题
+## 常见问题
 
 | 问题 | 解决方法 |
 |------|---------|
-| `DevToolsActivePort file doesn't exist` | 确保关闭了所有 Chrome 窗口后再运行 |
-| 找不到供应商选项 | 检查 `SUPPLIER_KEYWORD` 和 `SUPPLIER_NAME` 是否与网站完全一致 |
-| 下载超时 | 增大 `settings.py` 中的 `DELAY_DOWNLOAD` 值 |
-| 日期填写失败 | 网站可能使用日期选择器而非直接输入，需调整 `_fill_date_input` 函数 |
+| 无法连接到 WebBridge daemon | 打开 Chrome 中 WebBridge 扩展面板，daemon 会自动启动 |
+| 页数不对 | 检查是否手动勾选了全部需要的采购单状态 |
+| 下载超时 | 增大 `config/settings.py` 中 `DELAY_DOWNLOAD` |
+| 选择器失效 | 页面更新了 Next UI 组件，按 F12 检查元素更新选择器 |
