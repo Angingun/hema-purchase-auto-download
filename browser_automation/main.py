@@ -11,6 +11,7 @@
 """
 
 import os
+import subprocess
 import sys
 import time
 import json
@@ -543,15 +544,29 @@ def run(start_date: str = None, end_date: str = None, add_days: int = 0):
     logger.info("创建日期: %s ~ %s", create_start, create_end)
     logger.info("要求到货日期: %s ~ %s", delivery_start, delivery_end)
 
-    # ── 创建 WebBridge 客户端、设置下载目录 ──────────────────────────
+    # ── 创建 WebBridge 客户端、自动拉起 daemon ────────────────────────
+    daemon_bin = os.path.expandvars(
+        r"%USERPROFILE%\.kimi-webbridge\bin\kimi-webbridge.exe"
+    )
+    if not os.path.isfile(daemon_bin):
+        logger.error("找不到 WebBridge daemon: %s", daemon_bin)
+        logger.error("请确认已安装 Kimi WebBridge")
+        return
+
+    # 尝试启动 daemon（多次启动不影响，daemon 自带幂等）
+    logger.info("正在启动 WebBridge daemon...")
+    subprocess.run(
+        [daemon_bin, "start"],
+        capture_output=True,
+        timeout=10,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    time.sleep(2)
+
     try:
         wb = WebBridgeClient(SESSION, port=WEBBRIDGE_PORT)
     except WebBridgeError as e:
-        logger.error("WebBridge daemon 未运行: %s", e)
-        logger.error(
-            "请先启动 daemon："
-            r"& \"$env:USERPROFILE\.kimi-webbridge\bin\kimi-webbridge.exe\" start"
-        )
+        logger.error("WebBridge daemon 启动失败: %s", e)
         return
 
     # 使用 Chrome 默认下载目录（WebBridge 通过真实 Chrome 下载，文件自动到 Downloads）
