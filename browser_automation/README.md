@@ -13,7 +13,7 @@
 ## 安装
 
 ```bash
-pip install requests
+pip install requests openpyxl
 ```
 
 ## 配置
@@ -55,6 +55,14 @@ python main.py --start 2026-06-06 --add 6
 python main.py --start 2026-06-06 --end 2026-06-12
 ```
 
+## 测试运行
+
+推荐使用的测试命令（仅导出指定日期范围，快速验证整体流程）：
+
+```bash
+python main.py --start 2026-07-04 --end 2026-07-06
+```
+
 ## 运行流程
 
 1. 自动打开采购单列表页面（利用浏览器已有登录态，无需登录）
@@ -63,19 +71,31 @@ python main.py --start 2026-06-06 --end 2026-06-12
 4. 点击查询 → 检测总页数 → 逐页全选导出 Excel
 5. 文件保存到 `C:\Users\<用户名>\Downloads`（Chrome 默认下载目录）
 
+## 校验与验证
+
+脚本在每个环节都加入了自动校验，确保导出文件正确：
+
+- **页面状态校验 (Page state check)** — 导出前验证当前页码与预期一致。日志记录 `Pre-export check`，包含目标页码、实际页码、行数及首行关键信息。
+- **下载稳定性检查 (Download stability)** — 等待文件大小稳定后才视为下载完成，日志记录文件字节数。
+- **Excel 内容校验 (Excel validation)** — 使用 `openpyxl` 解析已下载文件，验证其是否为有效 Excel。结果包含 Sheet 名称、行数和列数。
+- **运行汇总 (Run summary)** — 脚本结束时输出结构化汇总，包含总页数、成功/失败数量、UI 表行数合计、Excel 验证行数合计。
+
+所有校验明细记录在 `logs/` 目录下的日志文件中。
+
 ## 项目结构
 
 ```
 browser_automation/
-├── main.py                     # 主入口
-├── requirements.txt            # 依赖：requests
+├── main.py                     # 主入口，完整流程编排
+├── requirements.txt            # 依赖：requests, openpyxl
 ├── config/
 │   └── settings.py             # 所有可配置参数
 ├── utils/
 │   ├── webbridge_client.py     # WebBridge daemon HTTP API 封装
-│   ├── helpers.py              # 日志、日期计算、下载等待
+│   ├── page_state.py           # 页面状态读取、表格稳定性等待
+│   ├── helpers.py              # 日志、日期计算、下载等待、Excel 校验
 │   └── driver_setup.py         # [已废弃] 旧 Selenium 驱动
-├── logs/                       # 运行日志
+├── logs/                       # 运行日志（含校验明细和汇总）
 └── README.md
 ```
 
@@ -87,3 +107,4 @@ browser_automation/
 | 页数不对 | 检查是否手动勾选了全部需要的采购单状态 |
 | 下载超时 | 增大 `config/settings.py` 中 `DELAY_DOWNLOAD` |
 | 选择器失效 | 页面更新了 Next UI 组件，按 F12 检查元素更新选择器 |
+| Excel 校验失败 | 确认文件是否完整下载；检查 `openpyxl` 是否正确安装 |

@@ -29,8 +29,10 @@ from config.settings import (
     DELAY_SHORT, DELAY_MEDIUM, DELAY_LONG, DELAY_DOWNLOAD, MAX_PAGES,
 )
 from utils.helpers import (
-    setup_logging, get_date_range, wait_for_new_file,
+    setup_logging, get_date_range, wait_download_complete,
+    verify_excel_file,
 )
+from utils.page_state import get_page_state, wait_table_ready, PageState
 from utils.webbridge_client import WebBridgeClient, WebBridgeError
 
 logger = logging.getLogger(__name__)
@@ -319,6 +321,14 @@ def click_search(wb: WebBridgeClient):
 
 def get_total_pages(wb: WebBridgeClient) -> int:
     """逐页点击「下一页」直到按钮 disabled，找出真实总页数。"""
+    logger.info("  Reading initial page state...")
+    try:
+        init_state = get_page_state(wb)
+        logger.info("  Initial: page=%d rows=%d key=%s",
+                    init_state['page_num'], init_state['row_count'],
+                    init_state['first_row_key'])
+    except Exception:
+        pass
     total_pages = 1
     for attempt in range(500):
         # 检查「下一页」按钮是否 disabled
@@ -386,41 +396,182 @@ def get_total_pages(wb: WebBridgeClient) -> int:
         })()
     """)
     time.sleep(1.5)
+    try:
+        back_state = get_page_state(wb)
+        logger.info("  Back to page 1: rows=%d key=%s",
+                    back_state['row_count'], back_state['first_row_key'])
+    except Exception:
+        pass
     return max(final_pages, 1)
 
 
-def _wait_for_table_data(wb: WebBridgeClient, timeout: int = 15) -> bool:
-    """等待表格数据加载完成，返回是否有数据。"""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        has_data = wb.evaluate("""
-            (() => {
-                const loading = document.querySelector('.next-table-loading, .next-loading');
-                const loadingHidden = !loading || loading.offsetParent === null;
-                const dataCells = document.querySelectorAll('.next-table-body td');
-                return loadingHidden && dataCells.length > 0;
-            })()
-        """)
-        if has_data:
-            return True
-        time.sleep(0.5)
-    return False
+def go_to_page(wb: WebBridgeClient, target_page: int,
+               timeout: int = 30) -> PageState:
+    """翻到目标页码并等待表格稳定。
 
-
-def export_current_page(wb: WebBridgeClient, page_num: int,
-                        download_dir: str) -> str | None:
-    """全选当前页 → 导出 Excel → 等待下载。文件留在 download_dir 中。
-
-    导出前等待表格数据加载完成，空页自动跳过。
-    导出后关闭可能弹出的新 tab（如退货确认页面）。
+    优先点击可见页码按钮；若不在视窗内，使用下一页按钮逐页前进。
+    每次点击后调用 wait_table_ready()。
+    无法到达目标页时抛出异常。
     """
-    if not _wait_for_table_data(wb):
-        logger.warning("  ✗ 第 %d 页无数据，跳过", page_num)
+    current = get_page_state(wb)
+    current_page_num = current.get('page_num', 0)
+
+    logger.info("  Navigate from page %d to page %d",
+                current_page_num, target_page)
+
+    if current_page_num == target_page:
+        return wait_table_ready(wb, target_page, timeout=timeout)
+
+    if current_page_num > target_page:
+        raise ValueError(
+            f"Cannot go back: current page {current_page_num} "
+            f"> target {target_page}"
+        )
+
+    # 逐页前进
+    while current_page_num < target_page:
+        expected_next = current_page_num + 1
+        result = wb.evaluate(f"""
+            (() => {{
+                const pager = document.querySelector('.next-pagination');
+                if (!pager) return 'no_pager';
+                const btns = pager.querySelectorAll('button');
+                for (const b of btns) {{
+                    if (b.textContent.trim() === '{expected_next}'
+                        && !b.disabled) {{
+                        b.click();
+                        return 'ok';
+                    }}
+                }}
+                for (const b of btns) {{
+                    if (b.classList.contains('next')
+                        && !b.disabled
+                        && !b.hasAttribute('disabled')) {{
+                        b.click();
+                        return 'next';
+                    }}
+                }}
+                return 'stuck';
+            }})()
+        """)
+
+        if result == 'stuck':
+            raise RuntimeError(
+                f"Pagination stuck at page {current_page_num} "
+                f"(target {target_page})"
+            )
+
+        current_page_num += 1
+
+        if current_page_num < target_page:
+            time.sleep(1.0)
+        else:
+            return wait_table_ready(wb, target_page, timeout=timeout)
+
+    return wait_table_ready(wb, target_page, timeout=timeout)
+
+
+
+def go_to_next_page(wb: WebBridgeClient, current_state: PageState,
+                    timeout: int = 30) -> PageState | None:
+    """点击下一页，并等待页码与订单 hash 都变化。
+
+    返回 None 表示当前页已经是最后一页。
+    """
+    if not current_state.get('can_next'):
         return None
 
-    logger.info("  ▶ 第 %d 页：全选并导出...", page_num)
+    current_page = int(current_state.get('page_num', 0) or 0)
+    current_hash = current_state.get('order_hash')
+    clicked = wb.evaluate("""
+        (() => {
+            const pager = document.querySelector('.next-pagination');
+            if (!pager) return 'no_pager';
+            for (const b of pager.querySelectorAll('button')) {
+                if (b.classList.contains('next') &&
+                    !b.disabled &&
+                    !b.hasAttribute('disabled') &&
+                    !b.classList.contains('disabled')) {
+                    b.click();
+                    return 'clicked';
+                }
+            }
+            return 'disabled';
+        })()
+    """)
+    if clicked != 'clicked':
+        logger.info("  Next page unavailable: %s", clicked)
+        return None
+
+    return wait_table_ready(
+        wb,
+        current_page + 1,
+        timeout=timeout,
+        previous_order_hash=str(current_hash) if current_hash else None,
+    )
+
+def export_current_page(wb: WebBridgeClient, page_num: int,
+                        download_dir: str,
+                        page_state: PageState | None = None) -> dict:
+    """全选当前页 → 导出 Excel → 强校验下载。
+
+    参数：
+      wb: WebBridge client
+      page_num: 期望页号
+      download_dir: 监控的下载目录
+      page_state: 预读的页面状态（来自 wait_table_ready）
+
+    返回结构化结果（字段兼容汇总日志）：
+      page_num, ok, ui_row_count, file_path, file_size,
+      excel_row_count, error
+    """
+    result: dict = {
+        'page_num': page_num,
+        'ok': False,
+        'ui_row_count': 0,
+        'file_path': None,
+        'file_size': None,
+        'excel_row_count': None,
+        'page_order_count': 0,
+        'page_order_hash': None,
+        'excel_order_count': 0,
+        'excel_order_hash': None,
+        'skipped': False,
+        'error': None,
+    }
+
+    # ── 导出前校验（单元 7）─────────────────────────────────────────
+    if page_state is None:
+        page_state = get_page_state(wb)
+
+    actual_page = page_state.get('page_num', 0)
+    row_count = page_state.get('row_count', 0)
+    first_key = page_state.get('first_row_key')
+
+    result['ui_row_count'] = row_count
+    result['page_order_count'] = len(page_state.get('order_ids', []))
+    result['page_order_hash'] = page_state.get('order_hash')
+    logger.info(
+        "  Pre-export check: target_page=%d actual_page=%d rows=%d key=%s",
+        page_num, actual_page, row_count, first_key,
+    )
+
+    if actual_page != page_num:
+        result['error'] = (
+            f"Page mismatch: expected {page_num}, actual {actual_page}"
+        )
+        logger.error("  ✗ %s", result['error'])
+        return result
+
+    if row_count == 0:
+        logger.warning("  Page %d has 0 visible rows, skipping export",
+                      page_num)
+        result['skipped'] = True
+        result['error'] = 'empty_page'
+        return result
 
     # ── 全选 ─────────────────────────────────────────────────────────
+    logger.info("  ▶ 全选当前页...")
     try:
         wb.evaluate("""
             (() => {
@@ -432,21 +583,21 @@ def export_current_page(wb: WebBridgeClient, page_num: int,
                     if (label) {
                         if (cb.checked) { label.click(); }
                         label.click();
-                        return 'clicked label, cb checked=' + cb.checked;
+                        return 'ok';
                     }
                 }
-                return 'no label found';
+                return 'no_label';
             })()
         """)
         time.sleep(DELAY_SHORT)
     except Exception as e:
-        logger.warning("  全选失败: %s", e)
+        logger.warning("  全选异常: %s", e)
 
-    # 记录下载前的文件和 tab 数
-    before = set(os.listdir(download_dir))
+    # ── 记录下载前状态 ──────────────────────────────────────────────
+    before_files = set(os.listdir(download_dir))
     tabs_before = len(wb.list_tabs())
 
-    # ── 点击导出 Excel ───────────────────────────────────────────────
+    # ── 点击导出 Excel ──────────────────────────────────────────────
     wb.evaluate("""
         (() => {
             const btns = document.querySelectorAll('button');
@@ -456,85 +607,114 @@ def export_current_page(wb: WebBridgeClient, page_num: int,
                     return 'clicked';
                 }
             }
-            return 'not found';
+            return 'not_found';
         })()
     """)
     logger.info("  等待第 %d 页文件下载...", page_num)
 
-    # 等待新文件出现
-    new_file = wait_for_new_file(download_dir, before, timeout=90)
-    if new_file:
-        logger.info("  ✔ 已下载: %s", new_file)
-    else:
-        logger.error("  ✗ 第 %d 页下载失败或超时", page_num)
+    # ── 强校验下载（单元 8）──────────────────────────────────────────
+    dl_result = wait_download_complete(
+        download_dir, before_files, timeout=DELAY_DOWNLOAD + 90
+    )
 
-    # ── 关闭导出时弹出的新 tab ───────────────────────────────────────
+    if dl_result['ok']:
+        result['file_path'] = dl_result['path']
+        result['file_size'] = dl_result['size_bytes']
+        logger.info("  Download complete: %s (%d bytes)",
+                    dl_result['filename'], dl_result['size_bytes'])
+
+        excel_result = verify_excel_file(str(dl_result['path']))
+        result['excel_row_count'] = excel_result.get('row_count')
+        result['excel_order_count'] = len(excel_result.get('order_ids', []))
+        result['excel_order_hash'] = excel_result.get('order_hash')
+        if excel_result['ok'] and excel_result.get('order_hash') == page_state.get('order_hash'):
+            result['ok'] = True
+            logger.info(
+                "  Excel validation passed: sheets=%s rows=%s cols=%s orders=%s",
+                excel_result.get('sheet_names'),
+                excel_result.get('row_count'),
+                excel_result.get('column_count'),
+                len(excel_result.get('order_ids', [])),
+            )
+        else:
+            if excel_result['ok']:
+                result['error'] = (
+                    'Excel order hash mismatch: '
+                    f"page={str(page_state.get('order_hash'))[:12]} ",
+                    f"excel={str(excel_result.get('order_hash'))[:12]}"
+                )
+            else:
+                result['error'] = (
+                    'Excel validation failed: '
+                    f"{excel_result.get('error')}"
+                )
+            logger.error("  %s", result['error'])
+    else:
+        result['error'] = dl_result['error']
+        logger.error("  ✗ 下载失败: %s", dl_result['error'])
+
+    # ── 关闭导出弹出新 tab ─────────────────────────────────────────
     time.sleep(1)
     tabs_after = wb.list_tabs()
     new_tabs = len(tabs_after) - tabs_before
     if new_tabs > 0:
         logger.info("  检测到 %d 个新 tab，正在关闭...", new_tabs)
-        # 切回当前 session 的 tab，然后关闭多余的
-        wb.find_tab("https://portalpro.hemaos.com/pages/supplierPlatformNew/purchaseList.html")
-        # 关闭 popup tab（通过 evaluate 在当前 context 中关不掉其他 tab，
-        # 用 close_tab 关当前 tab，但我们需要先切到多余 tab）
         for t in tabs_after:
             url = t.get('url', '')
-            if 'return' in url.lower() or '退货' in url or 'confirm' in url.lower():
+            if ('return' in url.lower() or '退货' in url
+                    or 'confirm' in url.lower()):
                 try:
                     wb.find_tab(url)
                     wb.evaluate("window.close()")
-                    logger.info("  已尝试关闭: %s", url[:60])
                 except Exception:
                     pass
-        # 回到主 tab
-        wb.find_tab("https://portalpro.hemaos.com/pages/supplierPlatformNew/purchaseList.html")
+        wb.find_tab(
+            "https://portalpro.hemaos.com/pages/supplierPlatformNew/purchaseList.html"
+        )
 
-    return new_file
+    return result
 
 
-def go_to_next_page(wb: WebBridgeClient, current: int) -> bool:
-    """翻到下一页。重试 3 次（每次间隔递增），应对页面渲染延迟。"""
-    target_page = current + 1
-    for attempt in range(3):
-        wait = 1 + attempt * 2
-        time.sleep(wait)
-        clicked = wb.evaluate(f"""
-            (() => {{
-                const btns = document.querySelectorAll('.next-pagination button');
-                let found = [];
-                for (const b of btns) {{
-                    const t = b.textContent.trim();
-                    found.push(t);
-                    if (t === '{target_page}' && !b.disabled) {{
-                        b.click();
-                        return 'page_btn';
-                    }}
-                }}
-                // 输出找到的所有按钮文字，方便调试
-                return 'btns: ' + JSON.stringify(found);
-            }})()
-        """)
-        if clicked == 'page_btn':
-            time.sleep(DELAY_LONG)
-            return True
-        # 备用：箭头按钮
-        clicked2 = wb.evaluate("""
-            (() => {
-                const nextBtn = document.querySelector(
-                    '.next-pagination-next:not(.disabled), ' +
-                    'button[aria-label="下一页"]:not([disabled])'
-                );
-                if (nextBtn) { nextBtn.click(); return true; }
-                return false;
-            })()
-        """)
-        if clicked2:
-            time.sleep(DELAY_LONG)
-            return True
-        logger.warning("  翻页重试 %d/3，按钮: %s", attempt + 1, clicked)
-    logger.warning("  3 次重试后仍找不到第 %d 页按钮", target_page)
-    return False
+def _print_summary(results: list[dict], download_dir: str):
+    """输出运行汇总日志。"""
+    success = [r for r in results if r.get('ok')]
+    skipped = [r for r in results if r.get('skipped')]
+    failed = [r for r in results if not r.get('ok') and not r.get('skipped')]
+    total_ui_rows = sum(r.get('ui_row_count', 0) or 0 for r in results)
+    total_excel_rows = sum(
+        r.get('excel_row_count', 0) or 0
+        for r in results if r.get('excel_row_count')
+    )
+
+    logger.info("=" * 50)
+    logger.info("  运行汇总")
+    logger.info("=" * 50)
+    logger.info("  总处理页数: %d", len(results))
+    logger.info("  成功页数:   %d", len(success))
+    logger.info("  Skipped pages: %d", len(skipped))
+    logger.info("  失败页数:   %d", len(failed))
+    logger.info("  UI 可见行数合计: %d", total_ui_rows)
+    logger.info("  Excel 行数合计: %d", total_excel_rows)
+    if failed:
+        logger.info("  失败详情:")
+        for r in failed:
+            logger.info("    - 第 %d 页: %s",
+                       r['page_num'], r.get('error', '未知'))
+    if skipped:
+        logger.info("  Skipped details:")
+        for r in skipped:
+            logger.info("    - Page %d: %s",
+                       r['page_num'], r.get('error', 'unknown'))
+    if success:
+        logger.info("  下载文件目录: %s", download_dir)
+        for r in success:
+            path = r.get('file_path', '')
+            size = r.get('file_size', 0)
+            excel_rows = r.get('excel_row_count', '?')
+            logger.info("    %s (%d bytes, excel=%s rows)",
+                       os.path.basename(path) if path else '?',
+                       size or 0, excel_rows)
+    logger.info("=" * 50)
 
 
 def run(start_date: str = None, end_date: str = None, add_days: int = 0):
@@ -613,29 +793,97 @@ def run(start_date: str = None, end_date: str = None, add_days: int = 0):
         # ── 3. 点击查询 ────────────────────────────────────────────
         click_search(wb)
 
-        # ── 4. 获取总页数 ──────────────────────────────────────────
+        # ── 4. 边导出边翻页，直到下一页禁用 ───────────────────────
         time.sleep(DELAY_MEDIUM)
-        total_pages = get_total_pages(wb)
-        logger.info("共 %d 页数据，开始逐页下载...", total_pages)
+        results: list[dict] = []
+        seen_page_hashes: dict[str, int] = {}
+        page = 1
+        try:
+            state = wait_table_ready(wb, page)
+        except TimeoutError as e:
+            logger.error("Page %d did not stabilize: %s", page, e)
+            results.append({
+                'page_num': page,
+                'ok': False,
+                'ui_row_count': 0,
+                'file_path': None,
+                'file_size': None,
+                'excel_row_count': None,
+                'page_order_count': 0,
+                'page_order_hash': None,
+                'excel_order_count': 0,
+                'excel_order_hash': None,
+                'skipped': False,
+                'error': f'Stabilization failed: {e}',
+            })
+            state = None
 
-        # ── 5. 逐页导出 ────────────────────────────────────────────
-        downloaded = []
-        for page in range(1, min(total_pages, MAX_PAGES) + 1):
-            logger.info("━━━ 第 %d/%d 页 ━━━", page, total_pages)
-
-            result = export_current_page(wb, page, actual_dl_dir)
-            if result:
-                downloaded.append(result)
-
-            if page < total_pages:
-                if not go_to_next_page(wb, page):
-                    logger.info("已到最后一页，停止翻页")
+        while state is not None and page <= MAX_PAGES:
+            logger.info("━━━ 第 %d 页 ━━━", page)
+            page_hash = state.get('order_hash')
+            if page_hash:
+                if page_hash in seen_page_hashes:
+                    prev = seen_page_hashes[str(page_hash)]
+                    msg = f"Duplicate page data: page {page} matches page {prev}"
+                    logger.error(msg)
+                    results.append({
+                        'page_num': page,
+                        'ok': False,
+                        'ui_row_count': state.get('row_count', 0),
+                        'file_path': None,
+                        'file_size': None,
+                        'excel_row_count': None,
+                        'page_order_count': len(state.get('order_ids', [])),
+                        'page_order_hash': page_hash,
+                        'excel_order_count': 0,
+                        'excel_order_hash': None,
+                        'skipped': False,
+                        'error': msg,
+                    })
                     break
+                seen_page_hashes[str(page_hash)] = page
 
-        logger.info("\n完成！共下载 %d 个文件，保存至: %s",
-                      len(downloaded), actual_dl_dir)
-        for f in downloaded:
-            logger.info(f"  {f}")
+            r = export_current_page(wb, page, actual_dl_dir, page_state=state)
+            results.append(r)
+            if not r.get("ok"):
+                logger.error("Stopping after failed export on page %d: %s",
+                             page, r.get('error'))
+                break
+
+            if not state.get('can_next'):
+                logger.info("已到最后一页，停止翻页")
+                break
+
+            try:
+                next_state = go_to_next_page(wb, state)
+            except TimeoutError as e:
+                logger.error("Failed to reach next page after page %d: %s", page, e)
+                results.append({
+                    'page_num': page + 1,
+                    'ok': False,
+                    'ui_row_count': 0,
+                    'file_path': None,
+                    'file_size': None,
+                    'excel_row_count': None,
+                    'page_order_count': 0,
+                    'page_order_hash': None,
+                    'excel_order_count': 0,
+                    'excel_order_hash': None,
+                    'skipped': False,
+                    'error': f'Navigation failed: {e}',
+                })
+                break
+            if next_state is None:
+                logger.info("已到最后一页，停止翻页")
+                break
+            page += 1
+            state = next_state
+
+        if page > MAX_PAGES:
+            logger.warning("达到 MAX_PAGES=%d，停止", MAX_PAGES)
+
+        # ── 5. 运行汇总 ────────────────────────────────────────────
+        _print_summary(results, actual_dl_dir)
 
     except WebBridgeError as e:
         logger.exception("WebBridge 异常: %s", e)
@@ -652,3 +900,6 @@ if __name__ == "__main__":
                         help="从 --start 往后加 N 天得到结束日期（与 --end 二选一）")
     args = parser.parse_args()
     run(start_date=args.start, end_date=args.end, add_days=args.add)
+
+
+

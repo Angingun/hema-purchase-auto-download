@@ -168,83 +168,94 @@ ExcelVerifyResult = dict[str, object]
 
 ## Task Checklist
 
-- [ ] 单元 1：记录当前仓库状态与执行边界
+- [x] 单元 1：记录当前仓库状态与执行边界
   - 类型：主任务
   - 输入：当前 git 工作区、现有项目文件
   - 输出：执行前状态记录，明确哪些文件已有未提交修改
   - 涉及文件：无代码修改；只读 `git status --short`
   - 接口契约：无
   - 验收标准：Claude Code 能说明执行前有哪些已修改或未跟踪文件，并承诺不回滚用户修改。
-- [ ] 单元 2：新增或更新项目协作说明
+
+- [x] 单元 2：新增或更新项目协作说明
   - 类型：可并行子任务
   - 输入：当前 `CLAUDE.md`、`browser_automation/README.md`、本计划
   - 输出：根目录 `AGENTS.md`
   - 涉及文件：`AGENTS.md`
   - 接口契约：无
   - 验收标准：`AGENTS.md` 明确说明优先保留真实 Chrome 登录态、WebBridge 运行架构、Codex Chrome 仅用于开发诊断、不要优先走 CDP/接口/Selenium。
-- [ ] 单元 3：固定本轮测试日期参数
+
+- [x] 单元 3：固定本轮测试日期参数
   - 类型：主任务
   - 输入：测试日期 `2026-07-04` 到 `2026-07-06`
   - 输出：脚本可通过 CLI 使用该日期运行，不强制改写默认配置
   - 涉及文件：`browser_automation/main.py`、`browser_automation/config/settings.py`
   - 接口契约：现有 `run(start_date: str | None, end_date: str | None, add_days: int = 0)` 保持兼容
   - 验收标准：可使用 `python main.py --start 2026-07-04 --end 2026-07-06` 运行；不破坏 config 默认日期逻辑。
-- [ ] 单元 4：实现页面状态读取
+
+- [x] 单元 4：实现页面状态读取
   - 类型：主任务
   - 输入：当前 WebBridge 会话、采购单列表页面 DOM
   - 输出：`get_page_state(wb)` 函数
-  - 涉及文件：`browser_automation/main.py` 或新增 `browser_automation/utils/page_state.py`
+  - 涉及文件：`browser_automation/utils/page_state.py`
   - 接口契约：`get_page_state(wb: WebBridgeClient) -> PageState`
   - 验收标准：函数不点击页面，只读取状态；日志能输出当前页码、可见行数、loading 状态、首行标识。
-- [ ] 单元 5：实现表格稳定等待
+
+- [x] 单元 5：实现表格稳定等待
   - 类型：主任务
   - 输入：`get_page_state(wb)`、期望页码
   - 输出：`wait_table_ready(wb, expected_page, timeout=30)` 函数
-  - 涉及文件：`browser_automation/main.py` 或 `browser_automation/utils/page_state.py`
+  - 涉及文件：`browser_automation/utils/page_state.py`
   - 接口契约：`wait_table_ready(wb: WebBridgeClient, expected_page: int, timeout: int = 30) -> PageState`
   - 验收标准：只有页码正确、loading 消失、行数和首行标识稳定后才返回；超时必须终止当前页导出并记录错误。
-- [ ] 单元 6：重构翻页逻辑
+
+- [x] 单元 6：重构翻页逻辑
   - 类型：主任务
   - 输入：当前页码、目标页码、分页组件 DOM
   - 输出：`go_to_page(wb, target_page, timeout=30)` 函数
   - 涉及文件：`browser_automation/main.py`
   - 接口契约：`go_to_page(wb: WebBridgeClient, target_page: int, timeout: int = 30) -> PageState`
   - 验收标准：每次翻页后必须确认当前激活页码等于目标页；无法到达目标页时失败，不继续导出错误页。
-- [ ] 单元 7：增强当前页导出前校验
+
+- [x] 单元 7：增强当前页导出前校验
   - 类型：主任务
   - 输入：目标页码、`PageState`
   - 输出：导出前审计日志
   - 涉及文件：`browser_automation/main.py`
   - 接口契约：复用 `PageState`
   - 验收标准：每页导出前日志至少包含目标页码、实际页码、可见行数、首行标识；实际页码不匹配时不点击导出。
-- [ ] 单元 8：实现下载完成强校验
+
+- [x] 单元 8：实现下载完成强校验
   - 类型：主任务
   - 输入：下载目录、导出前文件集合
   - 输出：`wait_download_complete(download_dir, before_files, timeout=120)`
   - 涉及文件：`browser_automation/utils/helpers.py`
   - 接口契约：`wait_download_complete(download_dir: str, before_files: set[str], timeout: int = 120) -> DownloadResult`
   - 验收标准：必须等待 `.crdownload` 消失和文件大小稳定；返回结构化结果；下载失败时记录明确原因。
-- [ ] 单元 9：实现 Excel 文件校验
+
+- [x] 单元 9：实现 Excel 文件校验
   - 类型：可并行子任务
   - 输入：下载后的 Excel 文件路径
   - 输出：`verify_excel_file(path)` 函数
   - 涉及文件：`browser_automation/utils/helpers.py`、`browser_automation/requirements.txt`
   - 接口契约：`verify_excel_file(path: str) -> ExcelVerifyResult`
   - 验收标准：可解析 `.xlsx` 文件并返回 sheet 名、行数、列数；如需依赖，`requirements.txt` 必须增加明确依赖，例如 `openpyxl`。
-- [ ] 单元 10：将下载与 Excel 校验接入导出流程
+
+- [x] 单元 10：将下载与 Excel 校验接入导出流程
   - 类型：主任务
   - 输入：`export_current_page()`、`wait_download_complete()`、`verify_excel_file()`
   - 输出：每页结构化导出结果
   - 涉及文件：`browser_automation/main.py`
   - 接口契约：`export_current_page(wb: WebBridgeClient, page_num: int, download_dir: str) -> dict[str, object] | None`
   - 验收标准：每页导出后日志包含文件名、大小、Excel 行数、校验状态；校验失败时不中断后续页前必须清晰记录失败页码。
-- [ ] 单元 11：生成运行汇总
+
+- [x] 单元 11：生成运行汇总
   - 类型：主任务
   - 输入：每页导出结果列表
   - 输出：最终汇总日志
   - 涉及文件：`browser_automation/main.py`
   - 接口契约：导出结果字段至少包含 `page_num`、`ui_row_count`、`file_path`、`file_size`、`excel_row_count`、`ok`、`error`
-  - 验收标准：运行结束时输出总页数、成功页数、失败页数、UI 可见行数合计、Excel 行数合计、失败页详情。
+  - 验收标准：运行结束时输出总页数、成功页数、跳过页数、失败页数、UI 可见行数合计、Excel 行数合计、失败页详情。
+
 - [ ] 单元 12：使用 Codex Chrome 做非主流程诊断
   - 类型：可并行子任务
   - 输入：用户已登录的 Chrome、测试日期 `2026-07-04` 到 `2026-07-06`
@@ -252,6 +263,7 @@ ExcelVerifyResult = dict[str, object]
   - 涉及文件：可写入运行日志或单独诊断记录；不要求改代码
   - 接口契约：无
   - 验收标准：诊断结果能支持或修正 `get_page_state()`、`wait_table_ready()`、`go_to_page()` 的 DOM 判断条件。
+
 - [ ] 单元 13：执行 1 次小范围真实运行验证
   - 类型：主任务
   - 输入：CLI 参数 `--start 2026-07-04 --end 2026-07-06`
@@ -259,14 +271,14 @@ ExcelVerifyResult = dict[str, object]
   - 涉及文件：`browser_automation/logs/`、Chrome 下载目录
   - 接口契约：无新增
   - 验收标准：脚本能完成运行；每一页都有页码确认、行数记录、下载文件、Excel 校验结果；如果失败，日志足够定位失败环节。
-- [ ] 单元 14：更新 README 的运行与排障说明
+
+- [x] 单元 14：更新 README 的运行与排障说明
   - 类型：可并行子任务
   - 输入：最终实现行为、测试命令
   - 输出：更新后的 `browser_automation/README.md`
   - 涉及文件：`browser_automation/README.md`
   - 接口契约：无
   - 验收标准：README 明确说明测试命令、Chrome 登录态要求、人工选择采购单状态、下载与 Excel 校验日志的位置。
-
 ## Files Not To Touch
 
 - 不修改账号、密码、Cookie、Token 或任何登录凭据。
