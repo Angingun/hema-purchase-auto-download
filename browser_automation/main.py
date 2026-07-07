@@ -389,12 +389,35 @@ def get_total_pages(wb: WebBridgeClient) -> int:
     return max(final_pages, 1)
 
 
+def _wait_for_table_data(wb: WebBridgeClient, timeout: int = 15) -> bool:
+    """等待表格数据加载完成，返回是否有数据。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        has_data = wb.evaluate("""
+            (() => {
+                const loading = document.querySelector('.next-table-loading, .next-loading');
+                const loadingHidden = !loading || loading.offsetParent === null;
+                const dataCells = document.querySelectorAll('.next-table-body td');
+                return loadingHidden && dataCells.length > 0;
+            })()
+        """)
+        if has_data:
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def export_current_page(wb: WebBridgeClient, page_num: int,
                         download_dir: str) -> str | None:
     """全选当前页 → 导出 Excel → 等待下载。文件留在 download_dir 中。
 
+    导出前等待表格数据加载完成，空页自动跳过。
     导出后关闭可能弹出的新 tab（如退货确认页面）。
     """
+    if not _wait_for_table_data(wb):
+        logger.warning("  ✗ 第 %d 页无数据，跳过", page_num)
+        return None
+
     logger.info("  ▶ 第 %d 页：全选并导出...", page_num)
 
     # ── 全选 ─────────────────────────────────────────────────────────
