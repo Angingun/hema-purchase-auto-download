@@ -8,7 +8,7 @@
 
 1. **Chrome** + 已登录盒马供应商平台 (`portalpro.hemaos.com`)
 2. **Kimi WebBridge 扩展** 已安装并启用
-3. **WebBridge daemon** 在运行（启动 Chrome 后打开扩展面板即自动拉起）
+3. **WebBridge daemon** 可由脚本自动 `start`；重启电脑后如扩展显示未就绪，先打开 Chrome 并点击扩展面板确认连接
 
 ## 安装
 
@@ -103,7 +103,8 @@ browser_automation/
 
 | 问题 | 解决方法 |
 |------|---------|
-| 无法连接到 WebBridge daemon | 打开 Chrome 中 WebBridge 扩展面板，daemon 会自动启动 |
+| 无法连接到 WebBridge daemon | 脚本会自动执行 `kimi-webbridge.exe start`；若仍失败，打开 Chrome 并点击 Kimi WebBridge 扩展面板确认连接 |
+| 扩展显示“未就绪” | 先确保 Chrome 已打开，再运行 `& "$env:USERPROFILE\.kimi-webbridge\bin\kimi-webbridge.exe" start`；如果仍未就绪，重新打开扩展面板或按 Kimi WebBridge 官方说明修复 native messaging |
 | 页数不对 | 检查是否手动勾选了全部需要的采购单状态 |
 | 下载超时 | 增大 `config/settings.py` 中 `DELAY_DOWNLOAD` |
 | 选择器失效 | 页面更新了 Next UI 组件，按 F12 检查元素更新选择器 |

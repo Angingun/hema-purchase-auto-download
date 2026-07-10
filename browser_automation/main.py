@@ -758,18 +758,31 @@ def run(start_date: str = None, end_date: str = None, add_days: int = 0):
 
     # 尝试启动 daemon（多次启动不影响，daemon 自带幂等）
     logger.info("正在启动 WebBridge daemon...")
-    subprocess.run(
-        [daemon_bin, "start"],
-        capture_output=True,
-        timeout=10,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
-    time.sleep(2)
-
     try:
-        wb = WebBridgeClient(SESSION, port=WEBBRIDGE_PORT)
+        proc = subprocess.run(
+            [daemon_bin, "start"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if proc.returncode != 0:
+            logger.warning("WebBridge start 返回非 0: %s", proc.returncode)
+            if proc.stderr:
+                logger.warning("WebBridge start stderr: %s", proc.stderr.strip()[:500])
+        elif proc.stdout:
+            logger.info("WebBridge start: %s", proc.stdout.strip()[:300])
+    except subprocess.TimeoutExpired:
+        logger.warning("WebBridge start 超时，继续检查 daemon 是否已就绪")
+
+    wb = WebBridgeClient(SESSION, port=WEBBRIDGE_PORT)
+    try:
+        logger.info("等待 WebBridge daemon 与 Chrome 扩展就绪...")
+        wb.wait_ready(timeout=30)
+        logger.info("WebBridge 已就绪")
     except WebBridgeError as e:
-        logger.error("WebBridge daemon 启动失败: %s", e)
+        logger.error("WebBridge 未就绪: %s", e)
+        logger.error("如果是重启电脑后的首次运行，请先打开 Chrome 并点击 Kimi WebBridge 扩展面板确认连接状态。")
         return
 
     # 使用 Chrome 默认下载目录（WebBridge 通过真实 Chrome 下载，文件自动到 Downloads）

@@ -125,6 +125,34 @@ class WebBridgeClient:
         """关闭当前 session 的所有 tab。"""
         return self._post("close_session")
 
+    def wait_ready(self, timeout: float = 30, interval: float = 1.0) -> None:
+        """等待 daemon 与 Chrome 扩展完成握手。
+
+        WebBridgeClient 构造函数只保存连接参数，不会主动访问 daemon。
+        重启电脑后 native host 或扩展可能尚未就绪，所以主流程启动后
+        需要显式调用本方法确认 list_tabs 可用。
+        """
+        deadline = time.time() + timeout
+        last_error: Exception | None = None
+
+        while time.time() < deadline:
+            try:
+                self.list_tabs()
+                return
+            except WebBridgeError as exc:
+                last_error = exc
+                time.sleep(interval)
+
+        detail = f" Last error: {last_error}" if last_error else ""
+        raise WebBridgeError(
+            "Kimi WebBridge 未就绪：daemon 已尝试启动，但 Chrome 扩展尚未连接。"
+            "请打开 Chrome，点击 Kimi WebBridge 扩展确认状态；如果仍显示未就绪，"
+            "重新运行 "
+            r"& \"$env:USERPROFILE\.kimi-webbridge\bin\kimi-webbridge.exe\" start"
+            " 后再试。"
+            + detail
+        )
+
     # ── 高级工具方法 ─────────────────────────────────────────────────
 
     def wait_for(self, css_selector: str, timeout: float = 15) -> bool:
