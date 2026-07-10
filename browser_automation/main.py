@@ -30,9 +30,11 @@ from config.settings import (
 )
 from utils.helpers import (
     setup_logging, get_date_range, wait_download_complete,
-    verify_excel_file,
+    verify_excel_file, verify_export_total,
 )
-from utils.page_state import get_page_state, wait_table_ready, PageState
+from utils.page_state import (
+    get_page_state, wait_table_ready, wait_query_result_total, PageState,
+)
 from utils.webbridge_client import WebBridgeClient, WebBridgeError
 
 logger = logging.getLogger(__name__)
@@ -292,7 +294,7 @@ def _check_export_settings(wb: WebBridgeClient):
     time.sleep(DELAY_SHORT)
 
 
-def click_search(wb: WebBridgeClient):
+def click_search(wb: WebBridgeClient) -> int:
     """点击「查询」按钮（按文字匹配），等待表格数据加载完成。"""
     logger.info("▶ 点击查询...")
     wb.evaluate("""
@@ -316,7 +318,9 @@ def click_search(wb: WebBridgeClient):
         if rows > 0:
             break
     time.sleep(1)
-    logger.info("✔ 查询已触发，结果已加载")
+    query_total = wait_query_result_total(wb)
+    logger.info("✔ 查询已触发，结果已加载，共 %d 条数据", query_total)
+    return query_total
 
 
 def get_total_pages(wb: WebBridgeClient) -> int:
@@ -640,7 +644,7 @@ def export_current_page(wb: WebBridgeClient, page_num: int,
             if excel_result['ok']:
                 result['error'] = (
                     'Excel order hash mismatch: '
-                    f"page={str(page_state.get('order_hash'))[:12]} ",
+                    f"page={str(page_state.get('order_hash'))[:12]} "
                     f"excel={str(excel_result.get('order_hash'))[:12]}"
                 )
             else:
@@ -675,7 +679,8 @@ def export_current_page(wb: WebBridgeClient, page_num: int,
     return result
 
 
-def _print_summary(results: list[dict], download_dir: str):
+def _print_summary(results: list[dict], download_dir: str,
+                   total_validation: dict | None = None):
     """输出运行汇总日志。"""
     success = [r for r in results if r.get('ok')]
     skipped = [r for r in results if r.get('skipped')]
@@ -695,6 +700,15 @@ def _print_summary(results: list[dict], download_dir: str):
     logger.info("  失败页数:   %d", len(failed))
     logger.info("  UI 可见行数合计: %d", total_ui_rows)
     logger.info("  Excel 行数合计: %d", total_excel_rows)
+    if total_validation is not None:
+        logger.info("  查询结果汇总: %d", total_validation['expected_total'])
+        logger.info("  Excel 唯一采购单数: %d", total_validation['actual_total'])
+        logger.info("  总量差额: %+d", total_validation['difference'])
+        logger.info("  总量核验: %s", "通过" if total_validation['ok'] else "失败")
+        if total_validation.get('duplicate_count'):
+            logger.warning("  跨文件重复采购单数: %d", total_validation['duplicate_count'])
+        if total_validation.get('error'):
+            logger.error("  总量核验原因: %s", total_validation['error'])
     if failed:
         logger.info("  失败详情:")
         for r in failed:
@@ -804,7 +818,7 @@ def run(start_date: str = None, end_date: str = None, add_days: int = 0):
                          delivery_start, delivery_end)
 
         # ── 3. 点击查询 ────────────────────────────────────────────
-        click_search(wb)
+        query_total = click_search(wb)
 
         # ── 4. 边导出边翻页，直到下一页禁用 ───────────────────────
         time.sleep(DELAY_MEDIUM)
@@ -896,12 +910,19 @@ def run(start_date: str = None, end_date: str = None, add_days: int = 0):
             logger.warning("达到 MAX_PAGES=%d，停止", MAX_PAGES)
 
         # ── 5. 运行汇总 ────────────────────────────────────────────
-        _print_summary(results, actual_dl_dir)
+        total_validation = verify_export_total(results, query_total)
+        _print_summary(results, actual_dl_dir, total_validation)
+        if not total_validation['ok']:
+            logger.error("本次下载未通过查询总量核验")
+            return False
+        return True
 
     except WebBridgeError as e:
         logger.exception("WebBridge 异常: %s", e)
+        return False
     except Exception as e:
         logger.exception("脚本异常终止: %s", e)
+        return False
 
 
 if __name__ == "__main__":
@@ -913,6 +934,4 @@ if __name__ == "__main__":
                         help="从 --start 往后加 N 天得到结束日期（与 --end 二选一）")
     args = parser.parse_args()
     run(start_date=args.start, end_date=args.end, add_days=args.add)
-
-
 

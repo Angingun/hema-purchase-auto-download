@@ -9,6 +9,7 @@ from utils.webbridge_client import WebBridgeClient
 logger = logging.getLogger(__name__)
 
 PageState = dict[str, object]
+
 """字段约定：
     page_num: int
     row_count: int              -- 主表 body 的真实业务行数
@@ -20,6 +21,45 @@ PageState = dict[str, object]
     raw: dict
 """
 
+def wait_query_result_total(wb: WebBridgeClient, timeout: int = 30) -> int:
+    """等待查询结果右上角的“共 N 条数据”稳定并返回 N。"""
+    deadline = time.time() + timeout
+    previous_total: int | None = None
+
+    while time.time() < deadline:
+        result = wb.evaluate(r"""
+            (() => {
+                const isVisible = (el) => {
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.display !== 'none' &&
+                        style.visibility !== 'hidden' &&
+                        rect.width > 0 && rect.height > 0;
+                };
+                const candidates = Array.from(document.querySelectorAll('.right > span'))
+                    .filter(isVisible)
+                    .map(el => el.textContent.trim());
+                const matched = candidates.find(text => /^共\s*(\d+)\s*条数据$/.test(text));
+                const match = matched && matched.match(/^共\s*(\d+)\s*条数据$/);
+                return {totalCount: match ? Number(match[1]) : null, candidates};
+            })()
+        """)
+
+        if isinstance(result, dict) and isinstance(result.get('totalCount'), int):
+            total = result['totalCount']
+            if previous_total == total:
+                logger.info("Query result total stable: %d", total)
+                return total
+            previous_total = total
+        else:
+            previous_total = None
+
+        time.sleep(0.5)
+
+    raise TimeoutError(
+        f"Could not read stable query result total within {timeout}s"
+    )
+
 
 def _hash_order_ids(order_ids: list[str]) -> str | None:
     if not order_ids:
@@ -29,7 +69,7 @@ def _hash_order_ids(order_ids: list[str]) -> str | None:
 
 def get_page_state(wb: WebBridgeClient) -> PageState:
     """读取当前页面状态，不修改 DOM。"""
-    result = wb.evaluate("""
+    result = wb.evaluate(r"""
         (() => {
             const isVisible = (el) => {
                 const style = getComputedStyle(el);

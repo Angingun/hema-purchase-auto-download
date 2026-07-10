@@ -226,4 +226,47 @@ def verify_excel_file(path: str) -> ExcelVerifyResult:
 
     return result
 
+def verify_export_total(export_results: list[dict], expected_total: int) -> dict:
+    """核验本轮成功下载 Excel 的唯一采购单号总数。"""
+    order_ids: list[str] = []
+    files: list[str] = []
+    errors: list[str] = []
+
+    for result in export_results:
+        path = result.get('file_path')
+        if not result.get('ok') or not path:
+            errors.append(f"page {result.get('page_num', '?')} was not exported")
+            continue
+
+        excel = verify_excel_file(str(path))
+        if not excel.get('ok'):
+            errors.append(
+                f"{os.path.basename(str(path))}: {excel.get('error', 'Excel validation failed')}"
+            )
+            continue
+        files.append(str(path))
+        order_ids.extend(str(order_id) for order_id in excel.get('order_ids', []))
+
+    unique_order_ids = set(order_ids)
+    duplicate_count = len(order_ids) - len(unique_order_ids)
+    actual_total = len(unique_order_ids)
+    ok = not errors and actual_total == expected_total
+    error = None
+    if errors:
+        error = '; '.join(errors)
+    elif actual_total != expected_total:
+        error = (
+            f"Query total mismatch: expected {expected_total}, "
+            f"Excel unique orders {actual_total}"
+        )
+
+    return {
+        'ok': ok,
+        'expected_total': expected_total,
+        'actual_total': actual_total,
+        'difference': actual_total - expected_total,
+        'file_count': len(files),
+        'duplicate_count': duplicate_count,
+        'error': error,
+    }
 
