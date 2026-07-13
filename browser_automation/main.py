@@ -295,9 +295,12 @@ def _check_export_settings(wb: WebBridgeClient):
 
 
 def click_search(wb: WebBridgeClient) -> int:
-    """点击「查询」按钮（按文字匹配），等待表格数据加载完成。"""
+    """点击「查询」按钮，等待本次查询的第一页数据替换旧结果。"""
+    previous_state = get_page_state(wb)
+    previous_order_hash = previous_state.get('order_hash')
+
     logger.info("▶ 点击查询...")
-    wb.evaluate("""
+    clicked = wb.evaluate("""
         (() => {
             const btns = document.querySelectorAll('button');
             for (const b of btns) {
@@ -309,19 +312,19 @@ def click_search(wb: WebBridgeClient) -> int:
             return 'not found';
         })()
     """)
-    # 等待表格加载
-    for _ in range(20):
-        time.sleep(0.5)
-        rows = wb.evaluate(
-            "document.querySelectorAll('.next-table-body tr').length"
-        )
-        if rows > 0:
-            break
-    time.sleep(1)
+
+    if clicked != 'clicked':
+        raise RuntimeError(f"查询按钮点击失败: {clicked}")
+
+    # 旧查询结果可能仍在 DOM 中，必须先确认本次查询的第一页数据已替换。
+    wait_table_ready(
+        wb,
+        expected_page=1,
+        previous_order_hash=str(previous_order_hash) if previous_order_hash else None,
+    )
     query_total = wait_query_result_total(wb)
     logger.info("✔ 查询已触发，结果已加载，共 %d 条数据", query_total)
     return query_total
-
 
 def get_total_pages(wb: WebBridgeClient) -> int:
     """逐页点击「下一页」直到按钮 disabled，找出真实总页数。"""
