@@ -78,3 +78,12 @@ python main.py --start 2026-07-04 --end 2026-07-06
 - `PLAN.md` checklist 已恢复输入、输出、涉及文件、接口契约、验收标准字段。
 - 默认配置日期保持原配置；测试日期 `2026-07-04` 到 `2026-07-06` 通过 CLI 参数传入。
 - 已清理 `helpers.py` 中会因 Selenium imports 删除而失效的遗留 helper。
+
+## 2026-07-14 状态选择自动化
+
+- 新增 `select_purchase_statuses(wb, wanted, timeout=10, fallback_manual=True)`。
+- 自动移除多余状态、输入筛选并点击缺失状态，最终反读已选标签校验。
+- 自动失败时回退人工调整，人工完成后仍需通过 `missing` / `extra` 校验。
+- 真实页面验证：五项缩减为前三项成功；随后自动补回“全部入库”“部分入库”成功。
+- `python -m py_compile` 与 `git diff --check` 通过。
+- Chrome 继续下载到 `CHROME_DOWNLOADS_DIR`；校验通过后移动到 `DOWNLOAD_DIR`，重名文件自动追加序号。

@@ -12,10 +12,9 @@ LOGIN_URL = "https://portalpro.hemaos.com/?storeTag=STORE_MANAGEMENT"
 PURCHASE_LIST_URL = "https://portalpro.hemaos.com/pages/supplierPlatformNew/purchaseList.html"
 
 # ── 下载文件保存目录（绝对路径）────────────────────────────────────
-# 注意：WebBridge 通过真实 Chrome 下载，默认保存到系统「下载」文件夹。
-# 如需自定义路径，脚本会尝试通过 CDP 设置；若不支持则回退到此路径。
-DOWNLOAD_DIR = r"C:\Users\Qingrun\Desktop\采购单导出"
-# Chrome 默认下载目录（备选，CDP 设置失败时使用）
+# Chrome 仍下载到系统「下载」文件夹；Excel 校验通过后移动到 DOWNLOAD_DIR。
+DOWNLOAD_DIR = r"C:\Users\Qingrun\OneDrive\01_工作\10_盒马-佳农\05_Sales\03_OrdersbyStores_RawData"
+# Chrome 默认下载目录，仅用于监控新文件，不修改浏览器设置。
 CHROME_DOWNLOADS_DIR = r"C:\Users\Qingrun\Downloads"
 
 # ── 查询参数 ────────────────────────────────────────────────────────

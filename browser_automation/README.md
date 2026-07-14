@@ -21,6 +21,9 @@ pip install requests openpyxl
 编辑 `config/settings.py`：
 
 ```python
+# 校验通过后的归档目录
+DOWNLOAD_DIR = r"C:\Users\Qingrun\OneDrive\01_工作\10_盒马-佳农\05_Sales\03_OrdersbyStores_RawData"
+
 # 供应商
 SUPPLIER_KEYWORD = "282265890"
 SUPPLIER_NAME = "KA佳农食品(上海)有限公司（新）"
@@ -32,7 +35,7 @@ DELIVERY_DATE_END   = ""     # 如 "2026-06-12"
 # 创建日期 = 要求到货 start 往前推 N 天
 CREATE_OFFSET_DAYS = 7
 
-# 采购单状态（脚本运行时会暂停让你手动勾选）
+# 采购单状态（脚本自动选择并反读校验）
 PURCHASE_STATUS_WANTED = [
     "审核通过", "部分发货", "发货完成",
     "全部入库", "部分入库",
@@ -66,10 +69,10 @@ python main.py --start 2026-07-04 --end 2026-07-06
 ## 运行流程
 
 1. 自动打开采购单列表页面（利用浏览器已有登录态，无需登录）
-2. 关闭弹窗 → 填写供应商 → 填写日期 → 勾选导出设置
-3. **暂停**：提示你在浏览器中手动勾选采购单状态，完成后按回车
+2. 关闭弹窗 → 填写供应商 → 填写日期 → 自动选择并校验采购单状态 → 勾选导出设置
+3. 自动选择失败时暂停，待人工调整后再次反读校验
 4. 点击查询 → 读取结果区“共 N 条数据” → 逐页全选导出 Excel
-5. 文件保存到 `C:\Users\<用户名>\Downloads`（Chrome 默认下载目录）
+5. Chrome 先下载到 `CHROME_DOWNLOADS_DIR`，校验通过后移动到 `DOWNLOAD_DIR`
 
 ## 校验与验证
 
@@ -106,7 +109,7 @@ browser_automation/
 |------|---------|
 | 无法连接到 WebBridge daemon | 脚本会自动执行 `kimi-webbridge.exe start`；若仍失败，打开 Chrome 并点击 Kimi WebBridge 扩展面板确认连接 |
 | 扩展显示“未就绪” | 先确保 Chrome 已打开，再运行 `& "$env:USERPROFILE\.kimi-webbridge\bin\kimi-webbridge.exe" start`；如果仍未就绪，重新打开扩展面板或按 Kimi WebBridge 官方说明修复 native messaging |
-| 页数不对 | 检查是否手动勾选了全部需要的采购单状态 |
+| 状态自动选择失败 | 按日志提示手动调整；脚本会反读已选标签，完全匹配配置后才继续 |
 | 下载超时 | 增大 `config/settings.py` 中 `DELAY_DOWNLOAD` |
 | 选择器失效 | 页面更新了 Next UI 组件，按 F12 检查元素更新选择器 |
 | Excel 校验失败 | 确认文件是否完整下载；检查 `openpyxl` 是否正确安装 |

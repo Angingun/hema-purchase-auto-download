@@ -24,6 +24,8 @@
   - 翻页只点击 Next 箭头，并等待页码 + 订单 hash 同时变化。
   - 增加重复页 hash 防护，防止翻页失败后重复导出上一页。
   - 增强 WebBridge 启动流程：执行 `kimi-webbridge.exe start` 后调用 `wb.wait_ready()`，确认 daemon 与 Chrome 扩展真正握手成功。
+  - 新增采购单状态自动选择：逐项输入筛选并点击精确菜单项，最终反读已选标签校验；失败时回退人工调整。
+  - Chrome 保持默认下载目录；每页 Excel 校验通过后移动到 `DOWNLOAD_DIR`，目标重名时追加序号且不覆盖历史文件。
 
 - `browser_automation/utils/webbridge_client.py`
   - 新增 `wait_ready(timeout=30, interval=1.0)`。
@@ -40,6 +42,7 @@
 
 - 测试日期：`2026-07-04` 到 `2026-07-06`。
 - 新流程成功导出 4 页，没有再出现旧流程的第 1/3 页重复和缺页问题。
+- 状态自动选择已在真实页面验证：五项缩减为前三项后校验通过，再自动补回两项并校验五项完全一致。
 - 自动导出文件 `(54)-(57)` 与手工文件 `(49)-(52)` 对比：前 3 页完全一致；第 4 页差异确认来自筛选时间/状态不一致，不再作为下载完整性问题处理。
 - 语法检查通过：
 
@@ -195,6 +198,13 @@ ExcelVerifyResult = dict[str, object]
 - 成功时返回 `None`。
 - 超时抛 `WebBridgeError`，错误信息应提示 Chrome 扩展未连接/未就绪。
 
+### `select_purchase_statuses(wb, wanted, timeout=10, fallback_manual=True) -> dict`
+
+- 自动移除目标集合之外的状态，并逐项输入筛选、点击缺失状态。
+- 以第一个 `.hippo-select-multiple` 的已选标签作为最终事实来源。
+- 返回 `ok`、`wanted`、`selected`、`missing`、`extra`、`options_seen`、`method`、`error`。
+- 只有 `missing == []` 且 `extra == []` 时 `ok=True`；自动失败可回退人工调整并再次反读。
+
 ## 5. 运行方式
 
 ```bash
@@ -217,15 +227,9 @@ python main.py --start 2026-07-04 --add 6
 
 ## 6. 已知问题与当前限制
 
-### 采购单状态仍需人工选择
+### 采购单状态自动选择的限制
 
-`hippo-select-multiple` 组件的下拉渲染和事件机制较特殊。当前主流程仍暂停，提示用户在浏览器中手动勾选 `PURCHASE_STATUS_WANTED` 后按回车继续。
-
-下一步可以将状态选择自动化，但必须做到：
-
-- 自动选择失败时回退人工。
-- 选择后反读已选状态并校验。
-- 不只相信 click 成功。
+主流程会自动将采购单状态调整为 `PURCHASE_STATUS_WANTED`，并反读标签确认目标集合完全一致。若页面组件结构变化、选项未出现或点击后校验不一致，会暂停并回退人工调整；人工完成后仍必须通过反读校验，不会只相信回车确认。
 
 ### Kimi WebBridge 重启后未就绪
 
@@ -237,44 +241,7 @@ python main.py --start 2026-07-04 --add 6
 
 ## 7. 下一阶段目标
 
-### 目标 1：自动化采购单状态选择
-
-建议新增正式接口：
-
-```python
-def select_purchase_statuses(
-    wb: WebBridgeClient,
-    wanted: list[str],
-    timeout: int = 10,
-    fallback_manual: bool = True,
-) -> dict[str, object]:
-    ...
-```
-
-返回结构建议：
-
-```python
-{
-    "ok": bool,
-    "wanted": list[str],
-    "selected": list[str],
-    "missing": list[str],
-    "extra": list[str],
-    "options_seen": list[str],
-    "method": str,
-    "error": str | None,
-}
-```
-
-验收标准：
-
-- 能打开采购单状态多选组件。
-- 能选择 `settings.py` 中的目标状态。
-- 能从页面反读已选状态。
-- `missing == []` 时才继续查询。
-- 自动选择失败时回退到当前人工确认流程。
-
-### 目标 2：查询条件快照
+### 目标 1：查询条件快照
 
 每次点击查询前/后记录：
 
@@ -286,13 +253,13 @@ def select_purchase_statuses(
 
 原因：当手工导出与自动导出结果不一致时，可以快速判断是筛选条件差异还是下载/翻页问题。
 
-### 目标 3：清理旧路径和文档一致性
+### 目标 2：清理旧路径和文档一致性
 
 - `get_total_pages()`、`go_to_page()` 已非主流程，可评估是否保留为诊断工具或删除。
 - `cdp_download.py` 和 `driver_setup.py` 应继续标记为历史参考，避免后续 Agent 误用。
 - `CLAUDE.md` 中旧结论应逐步同步到 `AGENTS.md` 或注明过期。
 
-### 目标 4：WebBridge 可用性诊断命令
+### 目标 3：WebBridge 可用性诊断命令
 
 可以新增轻量 CLI，例如：
 

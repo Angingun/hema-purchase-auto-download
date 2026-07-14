@@ -11,6 +11,7 @@
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -87,16 +88,23 @@ def fill_search_form(wb: WebBridgeClient, create_start: str, create_end: str,
     logger.info("  填写要求到货日期: %s ~ %s", delivery_start, delivery_end)
     _fill_date_row(wb, "要求到货", delivery_start, delivery_end)
 
-    # ── 4. 采购单状态（多选）── 需手动操作 ──────────────────────────
+    # ── 4. 采购单状态（多选）────────────────────────────────────────
     if PURCHASE_STATUS_WANTED:
-        logger.info("  ⏳ 请在浏览器中手动选择采购单状态：")
-        logger.info("     需要勾选: %s", ", ".join(PURCHASE_STATUS_WANTED))
-        logger.info("     选择完成后回到终端按回车继续...")
-        try:
-            input()
-        except (EOFError, OSError):
-            pass
-        logger.info("  状态选择已确认")
+        status_result = select_purchase_statuses(
+            wb, list(PURCHASE_STATUS_WANTED), fallback_manual=True
+        )
+        if not status_result["ok"]:
+            raise RuntimeError(
+                "采购单状态未通过校验，缺少: "
+                + ", ".join(status_result["missing"])
+                + "；多余: "
+                + ", ".join(status_result["extra"])
+            )
+        logger.info(
+            "  状态选择已校验（%s）: %s",
+            status_result["method"],
+            ", ".join(status_result["selected"]),
+        )
     else:
         logger.info("  跳过状态选择（PURCHASE_STATUS_WANTED 为空）")
 
@@ -149,86 +157,141 @@ def _set_one_date(wb: WebBridgeClient, row_label: str,
     """)
 
 
-def _select_purchase_status(wb: WebBridgeClient):
-    """打开采购单状态多选下拉，勾选 PURCHASE_STATUS_WANTED 中指定的状态。
-
-    策略：先取消全部已选 → 再逐个勾选目标状态。
-    状态组件为 hippo-select-multiple，下拉选项通过 React 渲染在 overlay 中。
-    """
-    wanted_json = json.dumps(list(PURCHASE_STATUS_WANTED), ensure_ascii=False)
-
-    # 1. 点击状态触发区域，打开下拉
-    wb.evaluate("""
+def _read_selected_purchase_statuses(wb: WebBridgeClient) -> list[str]:
+    """反读第一个多选组件中已选的采购单状态。"""
+    selected = wb.evaluate("""
         (() => {
-            const trigger = document.querySelector('.hippo-select-multiple');
-            if (trigger) {
-                trigger.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                trigger.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                trigger.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                return 'trigger clicked';
-            }
-            return 'trigger not found';
+            const select = document.querySelectorAll('.hippo-select-multiple')[0];
+            if (!select) return [];
+            return Array.from(select.querySelectorAll(
+                '.next-tag-deletable .next-tag-body'
+            )).map(el => el.textContent.trim()).filter(Boolean);
         })()
     """)
-    time.sleep(DELAY_MEDIUM)
+    return list(dict.fromkeys(selected or []))
 
-    # 2. 尝试多种方式查找并操作下拉选项
-    result = wb.evaluate(f"""
-        (() => {{
-            const wanted = {wanted_json};
-            const clicked = [];
 
-            // 方式 A: 在 overlay 中查找 menu item
-            const overlays = document.querySelectorAll('.next-overlay-wrapper');
-            for (const ov of overlays) {{
-                const items = ov.querySelectorAll('.next-menu-item, li, .next-checkbox-wrapper');
-                for (const item of items) {{
-                    const text = item.textContent.trim();
-                    for (const w of wanted) {{
-                        if (text.includes(w)) {{
-                            const cb = item.querySelector('input[type="checkbox"]');
-                            if (cb) {{
-                                if (!cb.checked) {{ cb.click(); clicked.push(w); }}
-                                else {{ clicked.push(w + '(already checked)'); }}
-                            }} else {{
-                                item.click();
-                                clicked.push(w + '(click)');
+def select_purchase_statuses(
+    wb: WebBridgeClient,
+    wanted: list[str],
+    timeout: int = 10,
+    fallback_manual: bool = True,
+) -> dict[str, object]:
+    """将采购单状态设置为 wanted，并以页面已选标签作为最终校验。"""
+    wanted = list(dict.fromkeys(status.strip() for status in wanted if status.strip()))
+    options_seen: list[str] = []
+    method = "automatic"
+    auto_error: str | None = None
+
+    try:
+        selected = _read_selected_purchase_statuses(wb)
+        if not wb.element_exists('.hippo-select-multiple input'):
+            raise RuntimeError("未找到采购单状态多选输入框")
+
+        for status in [value for value in selected if value not in wanted]:
+            marked = wb.evaluate(f"""
+                (() => {{
+                    const select = document.querySelectorAll(
+                        '.hippo-select-multiple'
+                    )[0];
+                    if (!select) return false;
+                    for (const old of document.querySelectorAll(
+                        '[data-status-remove-target]'
+                    )) {{
+                        old.removeAttribute('data-status-remove-target');
+                    }}
+                    for (const tag of select.querySelectorAll('.next-tag-deletable')) {{
+                        const body = tag.querySelector('.next-tag-body');
+                        if (body?.textContent.trim() === {_js_str(status)}) {{
+                            tag.setAttribute('data-status-remove-target', 'true');
+                            return true;
+                        }}
+                    }}
+                    return false;
+                }})()
+            """)
+            if not marked:
+                raise RuntimeError(f"无法定位待移除状态: {status}")
+            wb.click('[data-status-remove-target="true"] .next-tag-tail')
+            time.sleep(DELAY_SHORT)
+
+        selected = _read_selected_purchase_statuses(wb)
+        for status in [value for value in wanted if value not in selected]:
+            wb.fill('.hippo-select-multiple input', status)
+            deadline = time.time() + timeout
+            option_ready = False
+            while time.time() < deadline:
+                option_info = wb.evaluate(f"""
+                    (() => {{
+                        const seen = [];
+                        let matched = false;
+                        for (const old of document.querySelectorAll(
+                            '[data-status-option-target]'
+                        )) {{
+                            old.removeAttribute('data-status-option-target');
+                        }}
+                        for (const item of document.querySelectorAll(
+                            '.hippo-select-menu-item'
+                        )) {{
+                            if (item.offsetParent === null) continue;
+                            const text = item.textContent.trim();
+                            if (text) seen.push(text);
+                            if (text === {_js_str(status)}) {{
+                                item.setAttribute('data-status-option-target', 'true');
+                                matched = true;
                             }}
-                            break;
                         }}
-                    }}
-                }}
-                if (clicked.length > 0) break;
-            }}
+                        return {{matched, seen}};
+                    }})()
+                """) or {}
+                options_seen.extend(option_info.get("seen", []))
+                if option_info.get("matched"):
+                    option_ready = True
+                    break
+                time.sleep(0.2)
+            if not option_ready:
+                raise TimeoutError(f"未出现采购单状态选项: {status}")
+            wb.click('[data-status-option-target="true"]')
+            time.sleep(DELAY_SHORT)
 
-            // 方式 B: 在整个 document 中查找状态相关 checkbox
-            if (clicked.length === 0) {{
-                const allCbs = document.querySelectorAll('input[type="checkbox"]');
-                for (const cb of allCbs) {{
-                    const parentText = (cb.closest('label')?.textContent || '').trim();
-                    for (const w of wanted) {{
-                        if (parentText.includes(w)) {{
-                            if (!cb.checked) {{ cb.click(); clicked.push(w); }}
-                            break;
-                        }}
-                    }}
-                }}
-            }}
+        selected = _read_selected_purchase_statuses(wb)
+        missing = [value for value in wanted if value not in selected]
+        extra = [value for value in selected if value not in wanted]
+        if missing or extra:
+            raise RuntimeError(
+                f"自动选择后校验失败，missing={missing}, extra={extra}"
+            )
+    except Exception as exc:
+        auto_error = str(exc)
+        selected = _read_selected_purchase_statuses(wb)
+        logger.warning("  自动选择采购单状态失败: %s", auto_error)
 
-            return clicked.length > 0
-                ? 'clicked: ' + JSON.stringify(clicked)
-                : 'no items matched in any approach';
-        }})()
-    """)
-    logger.info("  状态选择结果: %s", result)
+    missing = [value for value in wanted if value not in selected]
+    extra = [value for value in selected if value not in wanted]
+    if (missing or extra) and fallback_manual:
+        method = "manual_fallback"
+        logger.info("  请在浏览器中手动调整采购单状态：")
+        logger.info("     需要选择: %s", ", ".join(wanted))
+        logger.info("     调整完成后回到终端按回车继续...")
+        try:
+            input()
+        except (EOFError, OSError):
+            pass
+        selected = _read_selected_purchase_statuses(wb)
+        missing = [value for value in wanted if value not in selected]
+        extra = [value for value in selected if value not in wanted]
 
-    # 3. 关闭下拉
-    wb.evaluate("""
-        document.activeElement?.dispatchEvent(
-            new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})
-        );
-    """)
-    time.sleep(DELAY_SHORT)
+    ok = not missing and not extra
+    return {
+        "ok": ok,
+        "wanted": wanted,
+        "selected": selected,
+        "missing": missing,
+        "extra": extra,
+        "options_seen": list(dict.fromkeys(options_seen)),
+        "method": method,
+        "error": None if ok else auto_error or "采购单状态校验失败",
+    }
 
 
 def _dismiss_dialogs(wb: WebBridgeClient):
@@ -682,6 +745,38 @@ def export_current_page(wb: WebBridgeClient, page_num: int,
     return result
 
 
+def _move_verified_export(result: dict, destination_dir: str) -> dict:
+    """将校验成功的下载文件移动到归档目录，不覆盖同名文件。"""
+    if not result.get('ok') or not result.get('file_path'):
+        return result
+
+    source = os.path.abspath(str(result['file_path']))
+    destination_dir = os.path.abspath(os.path.expandvars(destination_dir))
+
+    try:
+        os.makedirs(destination_dir, exist_ok=True)
+        destination = os.path.join(destination_dir, os.path.basename(source))
+        if os.path.normcase(source) == os.path.normcase(destination):
+            return result
+
+        stem, suffix = os.path.splitext(destination)
+        candidate = destination
+        sequence = 1
+        while os.path.exists(candidate):
+            candidate = f"{stem} ({sequence}){suffix}"
+            sequence += 1
+
+        moved_path = shutil.move(source, candidate)
+    except OSError as exc:
+        result['ok'] = False
+        result['error'] = f"Failed to move verified export: {exc}"
+        logger.error("  移动已校验文件失败: %s", exc)
+        return result
+
+    result['file_path'] = os.path.abspath(moved_path)
+    logger.info("  已移动到归档目录: %s", result['file_path'])
+    return result
+
 def _print_summary(results: list[dict], download_dir: str,
                    total_validation: dict | None = None):
     """输出运行汇总日志。"""
@@ -802,10 +897,11 @@ def run(start_date: str = None, end_date: str = None, add_days: int = 0):
         logger.error("如果是重启电脑后的首次运行，请先打开 Chrome 并点击 Kimi WebBridge 扩展面板确认连接状态。")
         return
 
-    # 使用 Chrome 默认下载目录（WebBridge 通过真实 Chrome 下载，文件自动到 Downloads）
-    actual_dl_dir = os.path.expandvars(r"%USERPROFILE%\Downloads")
+    actual_dl_dir = os.path.abspath(os.path.expandvars(CHROME_DOWNLOADS_DIR))
+    archive_dir = os.path.abspath(os.path.expandvars(DOWNLOAD_DIR))
     os.makedirs(actual_dl_dir, exist_ok=True)
-    logger.info("下载目录: %s", actual_dl_dir)
+    logger.info("Chrome 下载监控目录: %s", actual_dl_dir)
+    logger.info("校验后归档目录: %s", archive_dir)
 
     try:
         # ── 1. 导航到采购单列表（iframe 内页，直接访问） ────────────
@@ -874,6 +970,7 @@ def run(start_date: str = None, end_date: str = None, add_days: int = 0):
                 seen_page_hashes[str(page_hash)] = page
 
             r = export_current_page(wb, page, actual_dl_dir, page_state=state)
+            r = _move_verified_export(r, archive_dir)
             results.append(r)
             if not r.get("ok"):
                 logger.error("Stopping after failed export on page %d: %s",
@@ -914,7 +1011,7 @@ def run(start_date: str = None, end_date: str = None, add_days: int = 0):
 
         # ── 5. 运行汇总 ────────────────────────────────────────────
         total_validation = verify_export_total(results, query_total)
-        _print_summary(results, actual_dl_dir, total_validation)
+        _print_summary(results, archive_dir, total_validation)
         if not total_validation['ok']:
             logger.error("本次下载未通过查询总量核验")
             return False
