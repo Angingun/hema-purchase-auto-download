@@ -61,7 +61,7 @@ python -m py_compile browser_automation/main.py browser_automation/utils/page_st
 
 ### 运行时继续使用 Kimi WebBridge，不把 Codex Chrome 插件写进脚本
 
-- Python 脚本运行时使用 `WebBridgeClient` 调用本地 daemon：`http://127.0.0.1:10086/command`。
+- Python 脚本运行时使用 `WebBridgeClient` 调用本地 daemon；当前端口为 `18086`，用于避开 Windows 排除的 `10086`。
 - Codex Chrome 原生插件只用于开发期观察 DOM、截图、验证网页结构；不能作为 `main.py` 的运行时依赖。
 - 原因：脚本需要可被用户独立运行，而 Codex Chrome 插件是 Agent 开发环境能力，不是项目依赖。
 
@@ -238,6 +238,10 @@ python main.py --start 2026-07-04 --add 6
 ### 采购单状态自动选择的限制
 
 主流程会自动将采购单状态调整为 `PURCHASE_STATUS_WANTED`，并反读标签确认目标集合完全一致。若页面组件结构变化、选项未出现或点击后校验不一致，会暂停并回退人工调整；人工完成后仍必须通过反读校验，不会只相信回车确认。
+
+### WebBridge 自定义端口要求
+
+本机 `10086` 被 Windows 排除，项目使用 `18086`。Kimi WebBridge v1.11.3 扩展默认仍连接 `10086`；需在扩展弹窗连续点击 Kimi 图标 5 次开启高级设置，将 Daemon WebSocket 地址保存为 `ws://127.0.0.1:18086/ws`。
 
 ### Kimi WebBridge 重启后未就绪
 

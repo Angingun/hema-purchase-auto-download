@@ -21,6 +21,9 @@ pip install requests openpyxl
 编辑 `config/settings.py`：
 
 ```python
+# WebBridge 本地端口（本机 10086 被 Windows 排除，因此改用 18086）
+WEBBRIDGE_PORT = 18086
+
 # 校验通过后的归档目录
 DOWNLOAD_DIR = r"C:\Users\Qingrun\OneDrive\01_工作\10_盒马-佳农\05_Sales\03_OrdersbyStores_RawData"
 
@@ -113,6 +116,7 @@ browser_automation/
 | 无法连接到 WebBridge daemon | 脚本会自动执行 `kimi-webbridge.exe start`；若仍失败，打开 Chrome 并点击 Kimi WebBridge 扩展面板确认连接 |
 | 扩展显示“未就绪” | 先确保 Chrome 已打开，再运行 `& "$env:USERPROFILE\.kimi-webbridge\bin\kimi-webbridge.exe" start`；如果仍未就绪，重新打开扩展面板或按 Kimi WebBridge 官方说明修复 native messaging |
 | WebBridge 健康检查 | 运行 `python main.py --check-webbridge`，按输出区分 daemon 未监听与扩展未握手 |
+| 自定义端口后扩展未连接 | 连续点击扩展弹窗顶部 Kimi 图标 5 次，在“高级设置”把 Daemon WebSocket 地址改为 `ws://127.0.0.1:18086/ws`，测试后保存 |
 | 状态自动选择失败 | 按日志提示手动调整；脚本会反读已选标签，完全匹配配置后才继续 |
 | 下载超时 | 增大 `config/settings.py` 中 `DELAY_DOWNLOAD` |
 | 选择器失效 | 页面更新了 Next UI 组件，按 F12 检查元素更新选择器 |

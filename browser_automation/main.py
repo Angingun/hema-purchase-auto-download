@@ -1,7 +1,7 @@
 """
 采购单自动下载脚本 (WebBridge 版)
 网站: portalpro.hemaos.com
-依赖: Kimi WebBridge daemon (localhost:10086) + Chrome 扩展
+依赖: Kimi WebBridge daemon（端口由 settings.py 配置）+ Chrome 扩展
 功能: 通过 WebBridge 操作真实浏览器，自动填写查询条件并逐页导出 Excel
 
 前置条件:
@@ -61,11 +61,25 @@ def _start_webbridge_daemon(timeout: int = 15) -> dict[str, object]:
         result["error"] = f"找不到 WebBridge daemon: {daemon_bin}"
         return result
 
+    if _wait_local_port(WEBBRIDGE_PORT, timeout=0.3):
+        result.update({
+            "ok": True,
+            "stdout": f"daemon 已在 127.0.0.1:{WEBBRIDGE_PORT} 监听",
+        })
+        return result
+
     try:
         proc = subprocess.run(
-            [daemon_bin, "start"],
+            [
+                daemon_bin,
+                "start",
+                "--addr",
+                f"127.0.0.1:{WEBBRIDGE_PORT}",
+            ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )

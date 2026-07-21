@@ -94,3 +94,6 @@ python main.py --start 2026-07-04 --end 2026-07-06
 - 复用正式流程的幂等 daemon `start`，并分别检查本地端口与 Chrome 扩展握手。
 - 真实故障验证：`start` 返回成功但进程立即退出时，准确报告端口 `10086` 未监听并返回退出码 `1`。
 - 静态检查：`python -m py_compile` 与 `git diff --check` 通过。
+- 本机 `10086` 落入 Windows TCP 排除范围 `10006-10105`；项目改用 `18086`，daemon 启动显式传入 `--addr`。
+- 扩展 v1.11.3 默认 WebSocket 为 `10086`；需通过扩展高级设置一次性改为 `ws://127.0.0.1:18086/ws`。
+- 真实验证通过：daemon 监听 `18086`，Chrome 扩展握手成功，`--check-webbridge` 返回退出码 `0`。
