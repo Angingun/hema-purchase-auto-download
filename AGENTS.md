@@ -24,6 +24,7 @@
   - 翻页只点击 Next 箭头，并等待页码 + 订单 hash 同时变化。
   - 增加重复页 hash 防护，防止翻页失败后重复导出上一页。
   - 增强 WebBridge 启动流程：执行 `kimi-webbridge.exe start` 后调用 `wb.wait_ready()`，确认 daemon 与 Chrome 扩展真正握手成功。
+  - 新增 `python main.py --check-webbridge`：依次检查可执行文件、daemon 端口和扩展握手，不导航页面、不下载。
   - 新增采购单状态自动选择：逐项输入筛选并点击精确菜单项，最终反读已选标签校验；失败时回退人工调整。
   - Chrome 保持默认下载目录；每页 Excel 校验通过后移动到 `DOWNLOAD_DIR`，目标重名时追加序号且不覆盖历史文件。
 
@@ -205,6 +206,13 @@ ExcelVerifyResult = dict[str, object]
 - 返回 `ok`、`wanted`、`selected`、`missing`、`extra`、`options_seen`、`method`、`error`。
 - 只有 `missing == []` 且 `extra == []` 时 `ok=True`；自动失败可回退人工调整并再次反读。
 
+### `check_webbridge(timeout=10.0) -> bool`
+
+- 执行一次幂等 daemon `start`，但不执行 `stop` / `restart`。
+- 先验证 `WEBBRIDGE_PORT` 是否监听，再用 `wait_ready()` / `list_tabs()` 验证扩展握手。
+- 成功返回 `True`；任一层失败返回 `False`，CLI 映射为退出码 `1`。
+- 不导航页面、不读取业务 DOM、不下载文件。
+
 ## 5. 运行方式
 
 ```bash
@@ -258,23 +266,6 @@ python main.py --start 2026-07-04 --add 6
 - `get_total_pages()`、`go_to_page()` 已非主流程，可评估是否保留为诊断工具或删除。
 - `cdp_download.py` 和 `driver_setup.py` 应继续标记为历史参考，避免后续 Agent 误用。
 - `CLAUDE.md` 中旧结论应逐步同步到 `AGENTS.md` 或注明过期。
-
-### 目标 3：WebBridge 可用性诊断命令
-
-可以新增轻量 CLI，例如：
-
-```bash
-python main.py --check-webbridge
-```
-
-只做：
-
-- 检查 `kimi-webbridge.exe` 是否存在。
-- 执行 `start`。
-- 调用 `wait_ready()`。
-- 打印 Chrome 扩展是否可用。
-
-这样用户重启电脑后可以先做健康检查，不必跑完整下载流程。
 
 ## 8. 给后续 Agent 的注意事项
 

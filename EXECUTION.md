@@ -87,3 +87,10 @@ python main.py --start 2026-07-04 --end 2026-07-06
 - 真实页面验证：五项缩减为前三项成功；随后自动补回“全部入库”“部分入库”成功。
 - `python -m py_compile` 与 `git diff --check` 通过。
 - Chrome 继续下载到 `CHROME_DOWNLOADS_DIR`；校验通过后移动到 `DOWNLOAD_DIR`，重名文件自动追加序号。
+
+## 2026-07-21 WebBridge 健康检查
+
+- 新增 `python main.py --check-webbridge`，不导航页面、不执行下载。
+- 复用正式流程的幂等 daemon `start`，并分别检查本地端口与 Chrome 扩展握手。
+- 真实故障验证：`start` 返回成功但进程立即退出时，准确报告端口 `10086` 未监听并返回退出码 `1`。
+- 静态检查：`python -m py_compile` 与 `git diff --check` 通过。

@@ -56,6 +56,9 @@ python main.py --start 2026-06-06 --add 6
 
 # 也可以配合 --end 精确指定
 python main.py --start 2026-06-06 --end 2026-06-12
+
+# 仅检查 WebBridge，不打开网页或下载
+python main.py --check-webbridge
 ```
 
 ## 测试运行
@@ -109,6 +112,7 @@ browser_automation/
 |------|---------|
 | 无法连接到 WebBridge daemon | 脚本会自动执行 `kimi-webbridge.exe start`；若仍失败，打开 Chrome 并点击 Kimi WebBridge 扩展面板确认连接 |
 | 扩展显示“未就绪” | 先确保 Chrome 已打开，再运行 `& "$env:USERPROFILE\.kimi-webbridge\bin\kimi-webbridge.exe" start`；如果仍未就绪，重新打开扩展面板或按 Kimi WebBridge 官方说明修复 native messaging |
+| WebBridge 健康检查 | 运行 `python main.py --check-webbridge`，按输出区分 daemon 未监听与扩展未握手 |
 | 状态自动选择失败 | 按日志提示手动调整；脚本会反读已选标签，完全匹配配置后才继续 |
 | 下载超时 | 增大 `config/settings.py` 中 `DELAY_DOWNLOAD` |
 | 选择器失效 | 页面更新了 Next UI 组件，按 F12 检查元素更新选择器 |

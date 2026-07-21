@@ -12,6 +12,7 @@
 
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -41,6 +42,105 @@ from utils.webbridge_client import WebBridgeClient, WebBridgeError
 logger = logging.getLogger(__name__)
 
 SESSION = "hema-" + datetime.now().strftime("%H%M%S")
+
+
+def _start_webbridge_daemon(timeout: int = 15) -> dict[str, object]:
+    """执行一次幂等 start，并返回可用于诊断的结构化结果。"""
+    daemon_bin = os.path.expandvars(
+        r"%USERPROFILE%\.kimi-webbridge\bin\kimi-webbridge.exe"
+    )
+    result: dict[str, object] = {
+        "ok": False,
+        "binary": daemon_bin,
+        "returncode": None,
+        "stdout": "",
+        "stderr": "",
+        "error": None,
+    }
+    if not os.path.isfile(daemon_bin):
+        result["error"] = f"找不到 WebBridge daemon: {daemon_bin}"
+        return result
+
+    try:
+        proc = subprocess.run(
+            [daemon_bin, "start"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except subprocess.TimeoutExpired:
+        result["error"] = f"WebBridge start 超时（{timeout}s）"
+        return result
+    except OSError as exc:
+        result["error"] = f"无法执行 WebBridge daemon: {exc}"
+        return result
+
+    result.update({
+        "ok": proc.returncode == 0,
+        "returncode": proc.returncode,
+        "stdout": (proc.stdout or "").strip(),
+        "stderr": (proc.stderr or "").strip(),
+    })
+    if proc.returncode != 0:
+        result["error"] = f"WebBridge start 返回非 0: {proc.returncode}"
+    return result
+
+
+def _wait_local_port(port: int, timeout: float = 5.0) -> bool:
+    """等待本地 TCP 端口开始监听。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.25)
+    return False
+
+
+def check_webbridge(timeout: float = 10.0) -> bool:
+    """检查 daemon 监听与 Chrome 扩展握手，不执行页面操作。"""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, OSError):
+        pass
+
+    start_result = _start_webbridge_daemon()
+    print(f"WebBridge 可执行文件: {start_result['binary']}")
+    if start_result.get("stdout"):
+        print(f"start: {start_result['stdout']}")
+    if not start_result["ok"]:
+        print(f"[警告] {start_result['error']}")
+        if start_result.get("stderr"):
+            print(f"stderr: {start_result['stderr']}")
+        if not os.path.isfile(str(start_result["binary"])):
+            return False
+
+    port_wait = min(5.0, timeout)
+    if not _wait_local_port(WEBBRIDGE_PORT, timeout=port_wait):
+        start_state = (
+            "启动命令已返回成功，但"
+            if start_result["ok"]
+            else "启动命令异常，且"
+        )
+        print(
+            f"[失败] daemon {start_state}端口 {WEBBRIDGE_PORT} "
+            "未监听；进程可能启动后立即退出。"
+        )
+        return False
+
+    print(f"[通过] daemon 正在监听 127.0.0.1:{WEBBRIDGE_PORT}")
+    wb = WebBridgeClient("webbridge-health-check", port=WEBBRIDGE_PORT)
+    try:
+        wb.wait_ready(timeout=max(1.0, timeout - port_wait))
+        tab_count = len(wb.list_tabs())
+    except WebBridgeError as exc:
+        print(f"[失败] daemon 可访问，但 Chrome 扩展未完成握手: {exc}")
+        return False
+
+    print(f"[通过] Chrome 扩展已连接，可读取 {tab_count} 个标签页")
+    return True
 
 
 def _js_str(s: str) -> str:
@@ -860,33 +960,17 @@ def run(start_date: str = None, end_date: str = None, add_days: int = 0):
     logger.info("要求到货日期: %s ~ %s", delivery_start, delivery_end)
 
     # ── 创建 WebBridge 客户端、自动拉起 daemon ────────────────────────
-    daemon_bin = os.path.expandvars(
-        r"%USERPROFILE%\.kimi-webbridge\bin\kimi-webbridge.exe"
-    )
-    if not os.path.isfile(daemon_bin):
-        logger.error("找不到 WebBridge daemon: %s", daemon_bin)
-        logger.error("请确认已安装 Kimi WebBridge")
-        return
-
     # 尝试启动 daemon（多次启动不影响，daemon 自带幂等）
     logger.info("正在启动 WebBridge daemon...")
-    try:
-        proc = subprocess.run(
-            [daemon_bin, "start"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        if proc.returncode != 0:
-            logger.warning("WebBridge start 返回非 0: %s", proc.returncode)
-            if proc.stderr:
-                logger.warning("WebBridge start stderr: %s", proc.stderr.strip()[:500])
-        elif proc.stdout:
-            logger.info("WebBridge start: %s", proc.stdout.strip()[:300])
-    except subprocess.TimeoutExpired:
-        logger.warning("WebBridge start 超时，继续检查 daemon 是否已就绪")
-
+    start_result = _start_webbridge_daemon()
+    if not start_result["ok"]:
+        logger.warning("%s", start_result["error"])
+        if start_result.get("stderr"):
+            logger.warning("WebBridge start stderr: %s", start_result["stderr"])
+        if not os.path.isfile(str(start_result["binary"])):
+            return False
+    if start_result.get("stdout"):
+        logger.info("WebBridge start: %s", str(start_result["stdout"])[:300])
     wb = WebBridgeClient(SESSION, port=WEBBRIDGE_PORT)
     try:
         logger.info("等待 WebBridge daemon 与 Chrome 扩展就绪...")
@@ -1032,6 +1116,13 @@ if __name__ == "__main__":
     parser.add_argument("--end",   help="要求到货日期 结束 (YYYY-MM-DD)")
     parser.add_argument("--add",   type=int, default=0,
                         help="从 --start 往后加 N 天得到结束日期（与 --end 二选一）")
+    parser.add_argument(
+        "--check-webbridge",
+        action="store_true",
+        help="只检查 WebBridge daemon 与 Chrome 扩展连接，不执行下载",
+    )
     args = parser.parse_args()
+    if args.check_webbridge:
+        raise SystemExit(0 if check_webbridge() else 1)
     run(start_date=args.start, end_date=args.end, add_days=args.add)
 
